@@ -1,155 +1,178 @@
 import numpy as np
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-class RandomWalkEnvironment:
+
+# Environment Class
+class Environment:
     """
-    Environment for the Random Walk problem.
+    Represents the environment for the n-step TD method.
+    Handles the state transitions, rewards, and true value initialization.
     """
+
     def __init__(self, n_states=19, start_state=10):
-        self.n_states = n_states
-        self.start_state = start_state
-        self.end_states = [0, n_states + 1]
-        self.reset()
+        self.n_states = n_states  # Number of states in the environment (excluding terminal states)
+        self.start_state = start_state  # Starting state for each episode
+        self.end_states = [0, n_states + 1]  # Two terminal states
+        self.true_value = np.arange(-20, 22, 2) / 20.0  # True values for all states
+        self.true_value[0] = self.true_value[-1] = 0  # Terminal states have a value of 0
 
-    def reset(self):
+    def step(self, state):
         """
-        Reset the environment to the start state.
-        """
-        self.state = self.start_state
-        return self.state
+        Simulates one step in the environment.
+        Chooses the next state randomly and returns the reward based on the transition.
 
-    def step(self, action):
-        """
-        Take a step in the environment.
-
-        Parameters:
-            action (int): Action to take (-1 for left, +1 for right).
+        Args:
+            state (int): Current state.
 
         Returns:
-            next_state (int): The next state after taking the action.
-            reward (float): The reward received after taking the action.
-            done (bool): True if the episode has ended.
+            next_state (int): Next state after taking the step.
+            reward (int): Reward associated with the transition.
         """
-        next_state = self.state + action
-        if next_state == self.end_states[0]:
-            reward = -1
-            done = True
-        elif next_state == self.end_states[1]:
-            reward = 1
-            done = True
+        if np.random.binomial(1, 0.5) == 1:
+            next_state = state + 1  # Move right
         else:
-            reward = 0
-            done = False
+            next_state = state - 1  # Move left
 
-        self.state = next_state
-        return next_state, reward, done
+        # Assign reward based on reaching terminal states
+        if next_state == 0:
+            reward = -1
+        elif next_state == self.n_states + 1:
+            reward = 1
+        else:
+            reward = 0  # Intermediate states give no reward
 
+        return next_state, reward
+
+
+# Agent Class
 class Agent:
     """
-    Agent that performs n-step Temporal Difference learning.
+    Represents the agent that learns using the n-step Temporal Difference (TD) method.
+    Interacts with the environment to update state values.
     """
-    def __init__(self, n_states=19, gamma=1.0):
-        self.n_states = n_states
-        self.gamma = gamma
-        self.value_function = np.zeros(n_states + 2)  # Including terminal states
 
-    def temporal_difference(self, env, n_steps, alpha):
-        """
-        Perform n-step Temporal Difference learning.
+    def __init__(self, env, gamma=1):
+        self.env = env  # Reference to the environment
+        self.gamma = gamma  # Discount factor for future rewards
 
-        Parameters:
-            env (RandomWalkEnvironment): The environment to interact with.
-            n_steps (int): Number of steps 'n' in n-step TD.
-            alpha (float): Step size parameter (learning rate).
+    def temporal_difference(self, value, n, alpha):
         """
-        state = env.reset()
-        states = [state]
-        rewards = [0]  # Initialize with a dummy reward
-        T = float('inf')  # Time when episode ends
-        time = 0  # Current time step
+        Performs the n-step TD update for a single episode.
+
+        Args:
+            value (np.ndarray): State value estimates to be updated.
+            n (int): Number of steps to look ahead for updates.
+            alpha (float): Learning rate for updating state values.
+        """
+        state = self.env.start_state  # Start from the initial state
+        states = [state]  # Track visited states
+        rewards = [0]  # Track rewards for visited states
+        time = 0  # Time step
+        T = float('inf')  # Length of the episode, starts as infinity
 
         while True:
-            if time < T:
-                # Choose action randomly: move left (-1) or right (+1)
-                action = np.random.choice([-1, 1])
-                next_state, reward, done = env.step(action)
+            time += 1
 
-                # Store next state and reward
+            # If episode has not ended, take a step in the environment
+            if time < T:
+                next_state, reward = self.env.step(state)
                 states.append(next_state)
                 rewards.append(reward)
 
-                if done:
-                    T = time + 1  # Episode ends after this time step
+                # If terminal state is reached, set episode length
+                if next_state in self.env.end_states:
+                    T = time
 
-            # Time whose estimate is being updated
-            tau = time - n_steps + 1
-            if tau >= 0:
-                # Compute the n-step return
-                G = 0.0
-                for i in range(tau + 1, min(tau + n_steps, T) + 1):
-                    G += (self.gamma ** (i - tau - 1)) * rewards[i]
-                if (tau + n_steps) < T:
-                    G += (self.gamma ** n_steps) * self.value_function[states[tau + n_steps]]
+            # Time to perform an update
+            update_time = time - n
+            if update_time >= 0:
+                # Compute the return (cumulative discounted reward)
+                returns = 0.0
+                for t in range(update_time + 1, min(T, update_time + n) + 1):
+                    returns += pow(self.gamma, t - update_time - 1) * rewards[t]
+                # If not at terminal state, add value estimate of n-steps ahead state
+                if update_time + n <= T:
+                    returns += pow(self.gamma, n) * value[states[update_time + n]]
+                state_to_update = states[update_time]
+                # Update state value using the TD error
+                if state_to_update not in self.env.end_states:
+                    value[state_to_update] += alpha * (returns - value[state_to_update])
 
-                state_to_update = states[tau]
-                if state_to_update not in env.end_states:
-                    # Update the value function
-                    self.value_function[state_to_update] += alpha * (G - self.value_function[state_to_update])
-
-            if tau >= T - 1:
+            # If the episode has finished, break the loop
+            if update_time == T - 1:
                 break
 
-            time += 1
-            state = states[time]
+            state = next_state  # Move to the next state
 
-def figure7_2():
+    def run_experiment(self, steps, alphas, episodes, runs):
+        """
+        Runs the n-step TD experiments for various step sizes and learning rates.
+
+        Args:
+            steps (np.ndarray): Array of step sizes (n) to test.
+            alphas (np.ndarray): Array of learning rates to test.
+            episodes (int): Number of episodes for each combination.
+            runs (int): Number of independent runs for averaging results.
+
+        Returns:
+            errors (np.ndarray): RMS errors for each combination of step size and alpha.
+        """
+        errors = np.zeros((len(steps), len(alphas)))  # Store RMS errors
+
+        for run in tqdm(range(runs)):  # Repeat for multiple runs to average results
+            for step_ind, step in enumerate(steps):
+                for alpha_ind, alpha in enumerate(alphas):
+                    value = np.zeros(self.env.n_states + 2)  # Initialize state values
+                    for ep in range(episodes):
+                        self.temporal_difference(value, step, alpha)  # Perform n-step TD
+                        # Compute RMS error between estimated and true values
+                        errors[step_ind, alpha_ind] += np.sqrt(
+                            np.sum(np.power(value - self.env.true_value, 2)) / self.env.n_states
+                        )
+
+        # Average errors over all runs and episodes
+        errors /= episodes * runs
+        return errors
+
+
+# Utility Functions
+def plot_results(errors, steps, alphas):
     """
-    Reproduce Figure 7.2 from Sutton & Barto's 'Reinforcement Learning: An Introduction'.
-    Compare n-step TD methods with different 'n' and 'alpha' values.
+    Plots the results of the experiment as in Figure 7.2.
+
+    Args:
+        errors (np.ndarray): RMS errors for different step sizes and learning rates.
+        steps (np.ndarray): Step sizes (n) tested in the experiment.
+        alphas (np.ndarray): Learning rates tested in the experiment.
     """
-    n_states = 19
-    n_values = np.power(2, np.arange(0, 10))  # n = 1, 2, 4, ..., 512
-    alpha_values = np.arange(0, 1.1, 0.1)     # alpha from 0 to 1 in steps of 0.1
-    episodes = 10
-    runs = 100
-
-    # True state values from the Bellman equation
-    true_value = np.arange(-20, 22, 2) / 20.0
-    true_value[0] = true_value[-1] = 0  # Terminal states have zero value
-
-    # Initialize error tracking
-    errors = np.zeros((len(n_values), len(alpha_values)))
-
-    # Perform experiments
-    for run in tqdm(range(runs)):
-        env = RandomWalkEnvironment(n_states=n_states)
-        for n_idx, n in enumerate(n_values):
-            for alpha_idx, alpha in enumerate(alpha_values):
-                agent = Agent(n_states=n_states)
-                for episode in range(episodes):
-                    # Perform n-step TD learning
-                    agent.temporal_difference(env, n, alpha)
-                    # Compute RMS error over all non-terminal states
-                    errors[n_idx, alpha_idx] += np.sqrt(
-                        np.mean((agent.value_function[1:-1] - true_value[1:-1]) ** 2)
-                    )
-
-    # Average errors over runs and episodes
-    errors /= (runs * episodes)
-
-    # Plot results
-    for i, n in enumerate(n_values):
-        plt.plot(alpha_values, errors[i, :], label=f'n = {n}')
-    plt.xlabel(r'$\alpha$')
+    for i in range(len(steps)):
+        plt.plot(alphas, errors[i, :], label=f'n = {steps[i]}')
+    plt.xlabel('alpha')
     plt.ylabel('RMS error')
-    plt.ylim([0.25, 0.55])
+    plt.ylim([0.25, 0.55])  # Set y-axis limits
     plt.legend()
-
-    plt.savefig('professor_figure_7_2.png')
+    plt.savefig('figure_7_2.png')  # Save the plot to a file
     plt.close()
 
+
+# Main Execution
 if __name__ == '__main__':
-    figure7_2()
+    # Initialize the environment and agent
+    env = Environment()
+    agent = Agent(env)
+
+    # Parameters for the experiment
+    steps = np.power(2, np.arange(0, 10))  # Step sizes (n)
+    alphas = np.arange(0, 1.1, 0.1)  # Learning rates (alpha)
+    episodes = 10  # Number of episodes per combination
+    runs = 100  # Number of independent runs
+
+    # Run the experiment and collect errors
+    errors = agent.run_experiment(steps, alphas, episodes, runs)
+
+    # Plot the results
+    plot_results(errors, steps, alphas)
